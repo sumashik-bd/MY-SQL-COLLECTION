@@ -1,0 +1,202 @@
+--------------------
+-----------== = = == = = = = = = = = = PBMS AVT = = = = = = = == = = == = = = == === = = = =
+
+--======PPM SPECIFICATION SETUP ---------
+
+DROP VIEW PBMS_AVT.SAMP_COST_PBMS_AVT_VW2;
+
+/* Formatted on 08-Jun-26 1:04:47 PM (QP5 v5.115.810.9015) */
+CREATE OR REPLACE FORCE VIEW PBMS_AVT.SAMP_COST_PBMS_AVT_VW2
+(
+   P_N_CODE,
+   P_CODE,
+   P_DESC,
+   PACK1,
+   PACK2,
+   PACK_SIZE,
+   UTP,
+   TP,
+   UVP,
+   VAT,
+   UNIT_PROD_COST,
+   AVG_RATE,
+   SAMP_PACK_COST,
+   SAMP_PACK_VAT,
+   CC_UNIT_RATE,
+   TOT_SAMP_COST
+)
+AS
+     SELECT   DISTINCT
+              B.P_N_CODE,
+              C.P_CODE,
+              B.P_DESC,
+              B.PACK1,
+              B.PACK2,
+              B.PACK1 || 'x' || B.PACK2 PACK_SIZE,
+              TRIM (LTRIM (TO_CHAR (NVL (C.UTP, 0), '99,999.9999'))) UTP,
+              NVL (C.UTP, 0) TP,
+              TRIM (LTRIM (TO_CHAR (NVL (C.UVP, 0), '99,999.9999'))) UVP,
+              NVL (C.UVP, 0) VAT,
+              RTRIM (
+                 LTRIM (TO_CHAR (NVL (D.UNIT_PROD_COST, 0), '99,999.9999'))
+              )
+                 UNIT_PROD_COST,
+              NVL (D.UNIT_PROD_COST, 0) AVG_RATE,
+              ( (B.PACK1 * B.PACK2) * NVL (D.UNIT_PROD_COST, 0)) SAMP_PACK_COST,
+              ( (B.PACK1 * B.PACK2) * NVL (C.UVP, 0)) SAMP_PACK_VAT,
+              NVL (E.CC_UNIT_RATE, 0) CC_UNIT_RATE,
+              (  ( (B.PACK1 * B.PACK2) * NVL (D.UNIT_PROD_COST, 0))
+               + ( (B.PACK1 * B.PACK2) * NVL (C.UVP, 0))
+               + NVL (E.CC_UNIT_RATE, 0))
+                 TOT_SAMP_COST
+       FROM   (  SELECT   P_N_CODE,
+                          SUM (NVL (IN_QNTY, 0)) IN_QNTY,
+                          SUM (NVL (OUT_QNTY, 0)) OUT_QNTY,
+                          SUM (NVL (STK_QNTY, 0)) STK_QNTY
+                   FROM   SAM_PROD_STOCK
+                  WHERE   TO_CHAR (MFG_DATE, 'RRRR') = '2012'
+               --AND P_N_CODE IN (  SELECT   P_N_CODE FROM PROD_COST_TEMP)
+               GROUP BY   P_N_CODE
+                 HAVING   SUM (NVL (STK_QNTY, 0)) >= 0
+               UNION
+                 SELECT   P_N_CODE,
+                          SUM (NVL (IN_QNTY, 0)) IN_QNTY,
+                          SUM (NVL (OUT_QNTY, 0)) OUT_QNTY,
+                          SUM (NVL (STK_QNTY, 0)) STK_QNTY
+                   FROM   SAM_PROD_STOCK
+                  WHERE   TO_CHAR (MFG_DATE, 'RRRR') != '2012'
+               --AND P_N_CODE IN (  SELECT   P_N_CODE FROM PROD_COST_TEMP)
+               GROUP BY   P_N_CODE
+                 HAVING   SUM (NVL (STK_QNTY, 0)) >= 0) A,
+              SAM_PRODUCT B,
+              PRODUCT C,
+              (SELECT   A.P_CODE, A.UNIT_PROD_COST
+                 FROM   ERP_AVT.MON_PROD_COST_DTL A,
+                        (  SELECT   P_CODE, MAX (TRUNC (MNYR, 'MON')) MNYR
+                             FROM   ERP_AVT.MON_PROD_COST_DTL
+                         GROUP BY   P_CODE) B
+                WHERE   TRUNC (A.MNYR, 'MON') = B.MNYR AND A.P_CODE = B.P_CODE
+               UNION
+               SELECT   A.P_CODE, UNIT_TP UNIT_PROD_COST
+                 FROM   PROD_COSTING_VW A,
+                        (SELECT   DISTINCT P_CODE
+                           FROM   PROD_COSTING_VW
+                          WHERE   NVL (UNIT_TP, 0) > 0
+                         MINUS
+                         SELECT   DISTINCT P_CODE
+                           FROM   ERP_AVT.MON_PROD_COST_DTL) B
+                WHERE   NVL (UNIT_TP, 0) > 0 AND A.P_CODE = B.P_CODE) D,
+              (  SELECT   A.P_CODE,
+                          A.RAW_CODE,
+                          NVL (C.AVG_UNIT_RATE, 0) CC_UNIT_RATE
+                   FROM   AVT.BOM_MODIFIED A,
+                          RAW_MAT B,
+                          (SELECT   RAW_CODE, AVG_UNIT_RATE
+                             FROM   CMRCBOM_AVT.MON_RAW_MAT_AVG_UNIT_RATE
+                            WHERE   TRUNC (ADD_MONTHS (MNYR, 1), 'MON') =
+                                       ADD_MONTHS (TRUNC (SYSDATE, 'MON'), -1)) C
+                  WHERE       A.RAW_CODE = B.RAW_CODE
+                          AND A.RAW_CODE = C.RAW_CODE(+)
+                          AND B.FORM_TYPE = 'CC'
+                          AND NVL (B.RAW_STAT, 'C') = 'C'
+               ORDER BY   A.RAW_CODE) E
+      WHERE       B.P_N_CODE = A.P_N_CODE(+)
+              AND B.P_CODE = C.P_CODE
+              AND B.P_CODE = D.P_CODE(+)
+              AND B.P_CODE = E.P_CODE(+)
+              AND B.CC_RAW_CODE = E.RAW_CODE(+)
+   --AND NVL (C.PROD_STAT, '$') = 'C'
+   ORDER BY   P_DESC;
+
+----================----------------------------------==========================================================================
+-----------------MIS AVT --=====================
+====================================================
+DROP MATERIALIZED VIEW MIS_AVT.AVT_MPO_SALES_TAR_SGMT_PROD_MV;
+CREATE MATERIALIZED VIEW MIS_AVT.AVT_MPO_SALES_TAR_SGMT_PROD_MV 
+TABLESPACE MIS_OPL
+PCTUSED    0
+PCTFREE    10
+INITRANS   2
+MAXTRANS   255
+STORAGE    (
+            INITIAL          64K
+            NEXT             1M
+            MINEXTENTS       1
+            MAXEXTENTS       UNLIMITED
+            PCTINCREASE      0
+            BUFFER_POOL      DEFAULT
+           )
+NOCACHE
+NOLOGGING
+NOCOMPRESS
+NOPARALLEL
+BUILD IMMEDIATE
+REFRESH COMPLETE ON DEMAND
+WITH PRIMARY KEY
+AS 
+/* Formatted on 08-Jun-26 3:34:40 PM (QP5 v5.115.810.9015) */
+SELECT   MNYR,
+         A.MPO_CODE,
+         A.MPO_CODE SP_MPO_CODE,
+         SM_CODE,
+         AM_CODE,
+         RM_CODE,
+         FM_CODE,
+         P_CODE,
+         'G' FF_TYPE,
+         QNTY,
+         ACTVALUE
+  FROM   MIS_AVT.MPO_SALES_TAR A, SD_MPO_SP B
+ WHERE   A.MPO_CODE = B.MPO_CODE;
+
+---------------===================================================================
+DROP MATERIALIZED VIEW MIS_AVT.AVT_MPO_SALES_TAR_PRODUCT_WISE_MVW;
+CREATE MATERIALIZED VIEW MIS_AVT.AVT_MPO_SALES_TAR_PRODUCT_WISE_MVW 
+TABLESPACE MIS_OPL
+PCTUSED    0
+PCTFREE    10
+INITRANS   2
+MAXTRANS   255
+STORAGE    (
+            INITIAL          64K
+            NEXT             1M
+            MINEXTENTS       1
+            MAXEXTENTS       UNLIMITED
+            PCTINCREASE      0
+            BUFFER_POOL      DEFAULT
+           )
+NOCACHE
+NOLOGGING
+NOCOMPRESS
+NOPARALLEL
+BUILD IMMEDIATE
+USING INDEX
+            TABLESPACE MIS_OPL
+            PCTFREE    10
+            INITRANS   2
+            MAXTRANS   255
+            STORAGE    (
+                        INITIAL          64K
+                        NEXT             1M
+                        MINEXTENTS       1
+                        MAXEXTENTS       UNLIMITED
+                        PCTINCREASE      0
+                        BUFFER_POOL      DEFAULT
+                       )
+REFRESH COMPLETE ON DEMAND
+WITH PRIMARY KEY
+AS 
+/* Formatted on 08-Jun-26 3:34:06 PM (QP5 v5.115.810.9015) */
+  SELECT   MNYR,
+           P_CODE,
+           SUM (NVL (QNTY, 0)) QNTY,
+           SUM (NVL (ACTVALUE, 0)) ACTVALUE
+    FROM   MIS_AVT.AVT_MPO_SALES_TAR_SGMT_PROD_MV A
+   WHERE   TRUNC (MNYR, 'YEAR') >= '01-JAN-2026'
+GROUP BY   MNYR, P_CODE;
+
+COMMENT ON MATERIALIZED VIEW MIS_AVT.AVT_MPO_SALES_TAR_PRODUCT_WISE_MVW IS 'snapshot table for snapshot MIS_AVT.AVT_MPO_SALES_TAR_PRODUCT_WISE_MVW';
+
+-- Note: Index I_SNAP$_AVT_MPO_SALES_TAR_PRODUCT_WISE_MVW will be created automatically 
+--       by Oracle with the associated materialized view.
+-----==========================================================
